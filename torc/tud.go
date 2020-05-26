@@ -273,6 +273,7 @@ func (tu *TorrentWithUserData) TrackProgress() {
 				total_time := time.Now().Sub(added).Seconds()
 				tu.Tags.SetIfNew("completed", time.Now().Format(time.RFC822))
 				tu.Tags.SetIfNew("total_time", total_time)
+				tu.Tags.SetIfNew("last_rate", tu.dl_rate)
 				log.Info("DownloadCompleted for %s, last rate: %d B/s, took: %v sec", tu.Name, tu.dl_rate, total_time)
 				s.Close()
 			}
