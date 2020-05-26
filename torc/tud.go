@@ -11,13 +11,13 @@ import (
 )
 
 const LOAD_FROM_START = 10
-const LOAD_FROM_END  = 10
+const LOAD_FROM_END = 10
 
 func customPathMaker(baseDir string, info *metainfo.Info, infoHash metainfo.Hash) string {
-	tud,_ := torClient.GetTorrent(infoHash.HexString())
+	tud, _ := torClient.GetTorrent(infoHash.HexString())
 	if tud == nil {
-		if tud,_ = torClient.GetTorrent(info.Name); tud == nil {
-		panic(log.Error("customPathMaker: GetTorrent failed for: %s", info.Name ))
+		if tud, _ = torClient.GetTorrent(info.Name); tud == nil {
+			panic(log.Error("customPathMaker: GetTorrent failed for: %s", info.Name))
 		}
 	}
 	dir := tud.Tags.getString("download", "")
@@ -29,21 +29,21 @@ func customPathMaker(baseDir string, info *metainfo.Info, infoHash metainfo.Hash
 
 type TorrentWithUserData struct {
 	//
-	c *TorrentClient
-	files []*TorrentFile
-	maxConnections int
-	unpaused time.Time
+	c                   *TorrentClient
+	files               []*TorrentFile
+	maxConnections      int
+	unpaused            time.Time
 	unpaused_downloaded int64
-	dl_rate int
+	dl_rate             int
 	//
-	torrent *tt.Torrent
+	torrent  *tt.Torrent
 	Category string
 	//
-	Name string
-	Paused bool
+	Name          string
+	Paused        bool
 	ForceDownload bool
-	InfoReady bool
-	Tags Tags
+	InfoReady     bool
+	Tags          Tags
 }
 
 func NewTorrentWithUserData(tags *Tags) *TorrentWithUserData {
@@ -57,7 +57,7 @@ func (tu *TorrentWithUserData) AddTags(tags *Tags) {
 	if tags == nil {
 		return
 	}
-	for k,v := range *tags {
+	for k, v := range *tags {
 		tu.Tags.SetIfNew(k, v)
 	}
 }
@@ -67,8 +67,8 @@ func (tu *TorrentWithUserData) ClearTags() {
 }
 
 func (tu *TorrentWithUserData) SetTags(tags *Tags) {
-	for k,v := range *tags {
-		tu.Tags.Set(k,v)
+	for k, v := range *tags {
+		tu.Tags.Set(k, v)
 	}
 }
 
@@ -129,31 +129,31 @@ func (tu *TorrentWithUserData) SaveTags() {
 }
 
 func (tu *TorrentWithUserData) SyncFiles() {
-	if ! tu.InfoReady {
+	if !tu.InfoReady {
 		panic("Can't sync files while InfoReady is false")
 	}
 	tu.files = make([]*TorrentFile, len(tu.torrent.Files()))
-	for i,v := range tu.torrent.Files() {
+	for i, v := range tu.torrent.Files() {
 		f := NewTorrentFile(tu, v)
 		tu.files[i] = f
 	}
 }
 
 type TorrentInfo struct {
-	Name string 			`json:"Name"`
-	Size int64 				`json:"Size"`
-	FilesCount int 			`json:"FilesCount"`
-	Files []TorrentFileInfo `json:"Files"`
-	Seeders	int				`json:"Seeders"`
-	Leechers int			`json:"Leechers"`
-	Completed bool			`json:"Completed"`
-	Completion int 			`json:"Completion"`
-	BytesDownloaded int64	`json:"BytesDownloaded"`
-	BytesUploaded int64     `json:"BytesUploaded"`
-	Paused bool				`json:"Paused"`
-	OpenPlays int			`json:"OpenPlays"`
-	Tags Tags				`json:"Tags"`
-	DownloadRate int		`json:"DownloadRate"`
+	Name            string            `json:"Name"`
+	Size            int64             `json:"Size"`
+	FilesCount      int               `json:"FilesCount"`
+	Files           []TorrentFileInfo `json:"Files"`
+	Seeders         int               `json:"Seeders"`
+	Leechers        int               `json:"Leechers"`
+	Completed       bool              `json:"Completed"`
+	Completion      int               `json:"Completion"`
+	BytesDownloaded int64             `json:"BytesDownloaded"`
+	BytesUploaded   int64             `json:"BytesUploaded"`
+	Paused          bool              `json:"Paused"`
+	OpenPlays       int               `json:"OpenPlays"`
+	Tags            Tags              `json:"Tags"`
+	DownloadRate    int               `json:"DownloadRate"`
 }
 
 func (tu *TorrentWithUserData) TorrentInfo() (info TorrentInfo) {
@@ -162,38 +162,38 @@ func (tu *TorrentWithUserData) TorrentInfo() (info TorrentInfo) {
 		return
 	}
 	st := t.Stats()
-	files := make([]TorrentFileInfo,0)
+	files := make([]TorrentFileInfo, 0)
 	for _, tf := range tu.Files() {
 		files = append(files, tf.Info())
 	}
 	info = TorrentInfo{
 		Name:            t.Name(),
 		Size:            t.Length(),
-		FilesCount: 	 len(t.Files()),
-		Files: 			 files,
+		FilesCount:      len(t.Files()),
+		Files:           files,
 		Seeders:         st.ConnectedSeeders,
 		Leechers:        st.ActivePeers,
 		Completed:       t.BytesMissing() <= 0,
 		BytesDownloaded: st.BytesReadUsefulData.Int64(),
 		BytesUploaded:   st.BytesWrittenData.Int64(),
-		Paused:			 tu.Paused,
-		OpenPlays:  	 tu.ActiveReaders(),
-		Tags:			 tu.Tags,
-		Completion:		 tu.Completion(),
-		DownloadRate:	 tu.dl_rate,
+		Paused:          tu.Paused,
+		OpenPlays:       tu.ActiveReaders(),
+		Tags:            tu.Tags,
+		Completion:      tu.Completion(),
+		DownloadRate:    tu.dl_rate,
 	}
 	return
 }
 
 func (tu *TorrentWithUserData) Files() []*TorrentFile {
 	if !tu.InfoReady {
-		return make([]*TorrentFile,0)
+		return make([]*TorrentFile, 0)
 	}
 	return tu.files
 }
 
 func (tu *TorrentWithUserData) GetFileByName(name string) *TorrentFile {
-	for _,f := range tu.Files() {
+	for _, f := range tu.Files() {
 		if f.file.DisplayPath() == name || f.file.Path() == name {
 			return f
 		}
@@ -222,7 +222,7 @@ func (tu *TorrentWithUserData) Pause() {
 	if tu.InPlay() {
 		return
 	}
-	if ! tu.Paused {
+	if !tu.Paused {
 		log.Debug("pausing %s", tu.Name)
 		tu.torrent.DisallowDataDownload()
 	}
@@ -248,7 +248,7 @@ func (tu *TorrentWithUserData) Completion() (percents int) {
 	if tu.InfoReady {
 		bm := float64(tu.torrent.BytesCompleted())
 		tl := float64(tu.torrent.Length())
-		percents = int((bm/tl)*100.0)
+		percents = int((bm / tl) * 100.0)
 	}
 	return
 }
@@ -259,18 +259,29 @@ func (tu *TorrentWithUserData) TrackProgress() {
 	}
 	s := tu.torrent.SubscribePieceStateChanges()
 	go func() {
-		_v := <- s.Values
-		v := _v.(tt.PieceStateChange)
-		if v.Complete {
-			log.Trace("%s, piece %d comleted", tu.Name, v.Index)
-			tdelta := time.Now().Sub(tu.unpaused).Seconds()
-			tu.dl_rate = int(float64(tu.torrent.BytesCompleted() - tu.unpaused_downloaded) / tdelta)
+		for {
+			completed := tu.Completed()
+			_v := <-s.Values
+			v := _v.(tt.PieceStateChange)
+			if v.Complete {
+				log.Trace("%s, piece %d comleted", tu.Name, v.Index)
+				tdelta := time.Now().Sub(tu.unpaused).Seconds()
+				tu.dl_rate = int(float64(tu.torrent.BytesCompleted()-tu.unpaused_downloaded) / tdelta)
+			}
+			if !completed && tu.Completed() {
+				added := tu.Tags.get("added", time.Now().Format(time.RFC822)).(time.Time)
+				total_time := time.Now().Sub(added).Seconds()
+				tu.Tags.SetIfNew("completed", time.Now().Format(time.RFC822))
+				tu.Tags.SetIfNew("total_time", total_time)
+				log.Info("DownloadCompleted for %s, last rate: %d B/s, took: %v sec", tu.Name, tu.dl_rate, total_time)
+				s.Close()
+			}
 		}
 	}()
 }
 
 func (tu *TorrentWithUserData) ActiveReaders() (count int) {
-	for _,f := range tu.Files() {
+	for _, f := range tu.Files() {
 		count += f.ReadersOpen
 	}
 	return
@@ -305,12 +316,12 @@ func (tu *TorrentWithUserData) CanDelete() (ok bool) {
 }
 
 func (tu *TorrentWithUserData) Drop(reason string) {
-	if ! tu.CanDelete() {
+	if !tu.CanDelete() {
 		return
 	}
 
 	log.Trace("%s - %s", tu.Name, reason)
-	if ! tu.Paused {
+	if !tu.Paused {
 		log.Trace("stopping %s before deletion", tu.Name)
 		tu.Pause()
 		return
@@ -331,7 +342,7 @@ func (tu *TorrentWithUserData) Drop(reason string) {
 
 func (tu *TorrentWithUserData) ProcessTags() {
 	tu.c.lock.Lock()
-	defer  tu.c.lock.Unlock()
+	defer tu.c.lock.Unlock()
 
 	if tu.InPlay() {
 		tu.Resume("InPlay")
@@ -399,10 +410,9 @@ func (tu *TorrentWithUserData) ProcessTags() {
 	}
 
 	//  adjust speed
-	if tu.Tags.getString("private", "" ) == "" && tu.Completed() && tu.maxConnections != 1 {
+	if tu.Tags.getString("private", "") == "" && tu.Completed() && tu.maxConnections != 1 {
 		tu.maxConnections = tu.torrent.SetMaxEstablishedConns(1)
 		log.Debug("%s completed and not private, set maxConnections to 1", tu.Name)
 	}
 
 }
-
