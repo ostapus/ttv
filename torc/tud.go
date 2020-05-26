@@ -255,21 +255,28 @@ func (tu *TorrentWithUserData) Completion() (percents int) {
 
 func (tu *TorrentWithUserData) TrackProgress() {
 	if tu.Completed() {
+		log.Trace("%s is completed, no SubscribePieceStateChanges", tu.Name)
 		return
 	}
+	log.Trace("SubscribePieceStateChanges %s", tu.Name)
 	s := tu.torrent.SubscribePieceStateChanges()
 	go func() {
 		for {
 			completed := tu.Completed()
 			_v := <-s.Values
+			log.Trace("TrackProgressFunc: s.Values: %v", _v)
+			if _v == nil {
+				log.Debug("TrackProgressFunc s.Values is nil, closed ?, leaving TrackProgress func")
+				return
+			}
 			v := _v.(tt.PieceStateChange)
 			if v.Complete {
-				log.Trace("%s, piece %d comleted", tu.Name, v.Index)
+				log.Trace("TrackProgressFunc: %s, piece %d completed", tu.Name, v.Index)
 				tdelta := time.Now().Sub(tu.unpaused).Seconds()
 				tu.dl_rate = int(float64(tu.torrent.BytesCompleted()-tu.unpaused_downloaded) / tdelta)
 			}
 			if !completed && tu.Completed() {
-				added := tu.Tags.get("added", time.Now().Format(time.RFC822)).(time.Time)
+				added, _ := time.Parse(time.RFC822, tu.Tags.getString("added", time.Now().Format(time.RFC822)))
 				total_time := time.Now().Sub(added).Seconds()
 				tu.Tags.SetIfNew("completed", time.Now().Format(time.RFC822))
 				tu.Tags.SetIfNew("total_time", total_time)
@@ -278,6 +285,7 @@ func (tu *TorrentWithUserData) TrackProgress() {
 				s.Close()
 			}
 		}
+
 	}()
 }
 
