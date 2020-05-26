@@ -44,7 +44,7 @@ func getExternalIP() string {
 
 func getExternalPort(port_file string) int {
 	rc := int(0)
-	buf,err := ioutil.ReadFile(port_file)
+	buf, err := ioutil.ReadFile(port_file)
 	if err != nil {
 		log.Error("failed to read %v - %v", port_file, err)
 	} else {
@@ -68,7 +68,7 @@ type Tags map[string]interface{}
 type mapOfStrings map[string]string
 
 func (t Tags) get(name string, defval interface{}) interface{} {
-	v,ok := t[name]
+	v, ok := t[name]
 	if !ok {
 		return defval
 	}
@@ -76,7 +76,7 @@ func (t Tags) get(name string, defval interface{}) interface{} {
 }
 
 func (t Tags) getBool(name string, defval bool) bool {
-	v,ok := t[name]
+	v, ok := t[name]
 	if !ok {
 		return defval
 	}
@@ -84,7 +84,7 @@ func (t Tags) getBool(name string, defval bool) bool {
 }
 
 func (t Tags) getString(name string, defval string) string {
-	v,ok := t[name]
+	v, ok := t[name]
 	if !ok {
 		return defval
 	}
@@ -92,7 +92,7 @@ func (t Tags) getString(name string, defval string) string {
 }
 
 func (t Tags) getInt(name string, defval int) int {
-	v,ok := t[name]
+	v, ok := t[name]
 	if !ok {
 		return defval
 	}
@@ -100,7 +100,7 @@ func (t Tags) getInt(name string, defval int) int {
 }
 
 func (t Tags) getInt64(name string, defval int64) int64 {
-	v,ok := t[name]
+	v, ok := t[name]
 	if !ok {
 		return defval
 	}
@@ -116,7 +116,7 @@ func (t Tags) Set(name string, value interface{}) {
 }
 
 func (t Tags) SetIfNew(name string, value interface{}) {
-	if _,ok := t[name]; !ok {
+	if _, ok := t[name]; !ok {
 		t[name] = value
 		t.Invalidate()
 	}
@@ -141,9 +141,9 @@ func (t Tags) Validated() bool {
 	return t.getString("tags_updated", "no") == "no"
 }
 
-func ( t Tags) ToString() (rc string) {
+func (t Tags) String() (rc string) {
 	rc = ""
-	for k,v := range t {
+	for k, v := range t {
 		rc += fmt.Sprintf("  '%s': '%v'\n", k, v)
 	}
 	return
@@ -155,15 +155,14 @@ func IsValidTorrentFile(fullpathname string, checkExistsFile bool) bool {
 			return false
 		}
 	}
-	_,file := path.Split(fullpathname)
+	_, file := path.Split(fullpathname)
 	if strings.HasPrefix(file, ".") {
 		return false
 	}
-	if ! (strings.HasSuffix(file, ".torrent") ||
+	if !(strings.HasSuffix(file, ".torrent") ||
 		strings.HasSuffix(file, ".magnet") ||
-		strings.HasSuffix(file, ".yaml") ) {
+		strings.HasSuffix(file, ".yaml")) {
 		return false
 	}
 	return true
 }
-

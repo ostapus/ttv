@@ -82,7 +82,7 @@ func (tu *TorrentWithUserData) LoadTags() (tags *Tags) {
 		}
 	}
 	log.Debug("loaded tags for : %s from %s", tu.Name, pathname)
-	log.Debug("\n%s", tags.ToString())
+	log.Debug("\n%s", tags.String())
 	if len(*tags) <= 0 {
 		log.Warn("tags length %s is 0, keep old", pathname)
 		return &tu.Tags

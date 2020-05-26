@@ -213,7 +213,7 @@ func (c *TorrentClient) AddTorrentFromFile(cat *tCategory, filename string, full
 	tud.torrent.VerifyData()
 	log.Debug("Verifying data for %s is done", tud.Name)
 	log.Debug("AddTorrentFromFile completed: %s", tud.Name)
-	log.Debug("\n%s", tud.Tags.ToString())
+	log.Debug("\n%s", tud.Tags.String())
 	tud.ProcessTags()
 	tud.TrackProgress()
 	return
