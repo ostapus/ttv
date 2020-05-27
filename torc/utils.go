@@ -23,7 +23,7 @@ func GetEnv(name string, def string) string {
 
 func getExternalIP() string {
 	url := "https://api.ipify.org?format=text"
-	log.Debug("Getting IP address from  ipify")
+	log.Trace("Getting IP address from  ipify")
 	resp, err := http.Get(url)
 	rc := ""
 	if err != nil {
@@ -38,7 +38,7 @@ func getExternalIP() string {
 			log.Error("failed to get from err: %v %v -> '%v'", err, url, ip)
 		}
 	}
-	log.Debug("My external IP is:%s", rc)
+	log.Trace("My external IP is:%s", rc)
 	return rc
 }
 
@@ -55,7 +55,7 @@ func getExternalPort(port_file string) int {
 			rc = int(i)
 		}
 	}
-	log.Debug("external port: %v", rc)
+	log.Trace("external port: %v", rc)
 	return rc
 }
 
@@ -117,8 +117,7 @@ func (t Tags) Set(name string, value interface{}) {
 
 func (t Tags) SetIfNew(name string, value interface{}) {
 	if _, ok := t[name]; !ok {
-		t[name] = value
-		t.Invalidate()
+		t.Set(name, value)
 	}
 }
 

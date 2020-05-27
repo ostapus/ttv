@@ -72,6 +72,26 @@ func (tu *TorrentWithUserData) SetTags(tags *Tags) {
 	}
 }
 
+func (tu *TorrentWithUserData) SaveTorrent() {
+	tfile := tu.Tags.getString("fullpath", "")
+	log.Debug("%s -> %s", tu.Name, tfile)
+	if tfile == "" {
+		log.Error("Failed to SaveTorrent: fullpath is empty")
+		return
+	}
+	writer, err := os.Create(tfile)
+	if err != nil {
+		log.Error("Failed to os.Create: %s - %s", tu.Name, err)
+		return
+	}
+	err = tu.torrent.Metainfo().Write(writer)
+	if err != nil {
+		log.Error("Failed to Metainfo.Write: %s - %s", tu.Name, err)
+		return
+	}
+	tu.Tags.SetIfNew("torrent_saved", "yes")
+}
+
 func (tu *TorrentWithUserData) LoadTags() (tags *Tags) {
 	pathname := tu.Tags.getString("tags_fullpath", "")
 	log.Debug("loading tags from %s", pathname)
@@ -91,31 +111,15 @@ func (tu *TorrentWithUserData) LoadTags() (tags *Tags) {
 	return
 }
 
-func (tu *TorrentWithUserData) SaveTorrent() {
-	tfile := tu.Tags.getString("fullpath", "")
-	if tfile == "" {
-		log.Error("Failed to SaveTorrent: fullpath is empty")
-		return
-	}
-	writer, err := os.Create(tfile)
-	if err != nil {
-		log.Error("Failed to os.Create: %s - %s", tu.Name, err)
-		return
-	}
-	err = tu.torrent.Metainfo().Write(writer)
-	if err != nil {
-		log.Error("Failed to Metainfo.Write: %s - %s", tu.Name, err)
-		return
-	}
-	tu.Tags.SetIfNew("torrent_saved", "yes")
-}
-
 func (tu *TorrentWithUserData) SaveTags() {
+	log.Trace("%s", tu.Name)
 	if tu.Tags.Validated() {
+		log.Trace("%s tags already saved, there were no changes", tu.Name)
 		return
 	}
 	tu.Tags.Validate()
 	pathname := tu.Tags.getString("tags_fullpath", "")
+	log.Debug("%s -> %s", tu.Name, pathname)
 	if pathname == "" {
 		log.Error("tag: tags_fullpath is '' - %v", tu.Tags)
 		return
@@ -277,7 +281,7 @@ func (tu *TorrentWithUserData) TrackProgress() {
 			}
 			if !completed && tu.Completed() {
 				added, _ := time.Parse(time.RFC822, tu.Tags.getString("added", time.Now().Format(time.RFC822)))
-				total_time := time.Now().Sub(added).Seconds()
+				total_time := int(time.Now().Sub(added).Seconds())
 				tu.Tags.SetIfNew("completed", time.Now().Format(time.RFC822))
 				tu.Tags.SetIfNew("total_time", total_time)
 				tu.Tags.SetIfNew("last_rate", tu.dl_rate)
@@ -350,6 +354,7 @@ func (tu *TorrentWithUserData) Drop(reason string) {
 }
 
 func (tu *TorrentWithUserData) ProcessTags() {
+	log.Trace("ProcessTags: %s", tu.Name)
 	tu.c.lock.Lock()
 	defer tu.c.lock.Unlock()
 
@@ -357,6 +362,10 @@ func (tu *TorrentWithUserData) ProcessTags() {
 		tu.Resume("InPlay")
 		return
 	}
+	// populate some info
+	info := tu.TorrentInfo()
+	tu.Tags.Set("BytesUploaded", info.BytesUploaded)
+	//
 	tu.SaveTags()
 
 	// save_to_library

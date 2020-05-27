@@ -11,6 +11,7 @@ import (
 )
 
 type Op uint32
+
 const (
 	CategoryCreated = 1 << iota
 	CategoryRemoved
@@ -20,10 +21,10 @@ const (
 )
 
 type Event struct {
-	Category 	*tCategory
-	File 		string
-	FullPath	string
-	Op 			Op
+	Category *tCategory
+	File     string
+	FullPath string
+	Op       Op
 }
 
 type tCategory struct {
@@ -39,10 +40,10 @@ func (t tCategory) String() string {
 }
 
 var (
-	categories = make(map[string]*tCategory,0)
-	fsw *fsnotify.Watcher
-	basedir string
-	notify chan Event
+	categories = make(map[string]*tCategory, 0)
+	fsw        *fsnotify.Watcher
+	basedir    string
+	notify     chan Event
 )
 
 func init() {
@@ -64,12 +65,12 @@ func GetCategories() map[string]*tCategory {
 }
 
 func GetCategory(name string) (*tCategory, bool) {
-	v,ok := categories[name]
-	return v,ok
+	v, ok := categories[name]
+	return v, ok
 }
 
 func GetCategoryOrDefault(name string, defvalue string) (category *tCategory) {
-	category,ok := categories[name]
+	category, ok := categories[name]
 	if !ok {
 		category, ok = categories[defvalue]
 		if !ok {
@@ -80,9 +81,7 @@ func GetCategoryOrDefault(name string, defvalue string) (category *tCategory) {
 	return
 }
 
-
-
-func scanCategories(dir string)  {
+func scanCategories(dir string) {
 	log.Debug("scanning categories in %s : '%s'", basedir, dir)
 	if path.IsAbs(dir) {
 		basedir = dir
@@ -95,7 +94,7 @@ func scanCategories(dir string)  {
 			panic(log.Error("torrentsDir '%s' doesn't exists or not directory", basedir))
 		}
 		if err := fsw.Add(basedir); err != nil {
-			panic((log.Error("failed to fswatcher.add %s: %v", basedir, err)))
+			panic(log.Error("failed to fswatcher.add %s: %v", basedir, err))
 		}
 	}
 
@@ -120,7 +119,7 @@ func scanCategories(dir string)  {
 			}
 		}
 
-		if st, err := os.Stat( _c.download); ! (err == nil && st.IsDir()) {
+		if st, err := os.Stat(_c.download); !(err == nil && st.IsDir()) {
 			log.Error("category %s has no downloads %s . ignoring for now", _c.name, _c.download)
 			continue
 		}
@@ -134,9 +133,9 @@ func scanCategories(dir string)  {
 	notify <- Event{Op: CategoryLoaded}
 }
 
-func findCategoryByPath(path string) (category *tCategory, isDownloadDir bool, filePart string)  {
+func findCategoryByPath(path string) (category *tCategory, isDownloadDir bool, filePart string) {
 	// find category
-	for _,v := range categories {
+	for _, v := range categories {
 		if path == v.download {
 			log.Debug("category %s, download dir event %s == %s", v.name, v.download, path)
 			return v, true, ""
@@ -168,7 +167,7 @@ func onCategoryCreated(cat *tCategory) {
 }
 
 func onFileRemoved(cat *tCategory, fullpath string, file string) {
-	if ! IsValidTorrentFile(fullpath, false) {
+	if !IsValidTorrentFile(fullpath, false) {
 		return
 	}
 	log.Debug("%v: %s", cat, file)
@@ -176,7 +175,7 @@ func onFileRemoved(cat *tCategory, fullpath string, file string) {
 }
 
 func onFileCreated(cat *tCategory, fullpath string, file string) {
-	if ! IsValidTorrentFile(fullpath, true) {
+	if !IsValidTorrentFile(fullpath, true) {
 		return
 	}
 	log.Debug("%v: %s -> %s", cat, fullpath, file)
@@ -184,7 +183,7 @@ func onFileCreated(cat *tCategory, fullpath string, file string) {
 }
 
 func fswEvent() {
-	writes := make(map[string]*time.Timer,0)
+	writes := make(map[string]*time.Timer, 0)
 	for {
 		select {
 		case event := <-fsw.Events:
@@ -225,9 +224,9 @@ func fswEvent() {
 					continue
 				}
 
-				if ! (strings.HasSuffix(event.Name, ".torrent") ||
+				if !(strings.HasSuffix(event.Name, ".torrent") ||
 					strings.HasSuffix(event.Name, ".magnet") ||
-					strings.HasSuffix(event.Name, ".yaml") ) {
+					strings.HasSuffix(event.Name, ".yaml")) {
 					log.Trace("ignore unknown extension. not torrent/magnet/yaml: %s", event.Name)
 					continue
 				}
@@ -243,7 +242,7 @@ func fswEvent() {
 					} else if file == "" {
 						log.Warn("file %s done WRITES, findCategory said is not file", event.Name)
 					} else {
-						onFileCreated(cat, event.Name, file )
+						onFileCreated(cat, event.Name, file)
 					}
 				})
 			}
