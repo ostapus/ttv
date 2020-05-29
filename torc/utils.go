@@ -3,6 +3,7 @@ package torc
 import (
 	"fmt"
 	"github.com/pkg/errors"
+	"gopkg.in/yaml.v2"
 	"io/ioutil"
 	"net/http"
 	"os"
@@ -111,7 +112,7 @@ func (t Tags) Set(name string, value interface{}) {
 	oval := t[name]
 	t[name] = value
 	if oval != value {
-		t.Invalidate()
+		t.Invalidate(fmt.Sprintf("%s: %v != %v, tags are invalidated", name, oval, value))
 	}
 }
 
@@ -123,16 +124,18 @@ func (t Tags) SetIfNew(name string, value interface{}) {
 
 func (t Tags) Remove(name string) {
 	if _, ok := t[name]; ok {
-		t.Invalidate()
+		t.Invalidate(fmt.Sprintf("%s key removed, tags are invalidated", name))
 	}
 	delete(t, name)
 }
 
-func (t Tags) Invalidate() {
+func (t Tags) Invalidate(comment string) {
+	log.Trace(comment)
 	t["tags_updated"] = "yes"
 }
 
-func (t Tags) Validate() {
+func (t Tags) Validate(comment string) {
+	log.Trace(comment)
 	delete(t, "tags_updated")
 }
 
@@ -146,6 +149,23 @@ func (t Tags) String() (rc string) {
 		rc += fmt.Sprintf("  '%s': '%v'\n", k, v)
 	}
 	return
+}
+
+func ReadTagsFromFile(pathname string) (tags *Tags) {
+	log.Debug("from %s", pathname)
+	rc := Tags{}
+	if data, err := ioutil.ReadFile(pathname); err == nil {
+		if err := yaml.Unmarshal(data, &rc); err != nil {
+			log.Error("failed to yaml.Unmarshal: %v : %v", pathname, err)
+		}
+	}
+	log.Debug("loaded tags from %s", pathname)
+	log.Debug("\n%s", rc.String())
+	if len(rc) <= 0 {
+		log.Warn("tags length %s is 0, keep old", pathname)
+		return
+	}
+	return &rc
 }
 
 func IsValidTorrentFile(fullpathname string, checkExistsFile bool) bool {

@@ -20,28 +20,28 @@ const JACK_URL = `http://linux:9117`
 const jack_API_KEY = `tnwamc70lv1xygeh9f7v5v71a739u0re`
 
 type HttpServer struct {
-	r *mux.Router
-	tc *TorrentClient
+	r          *mux.Router
+	tc         *TorrentClient
 	ListenAddr string
 	ListenPort int64
 	configured bool
-	done missinggo.Event
+	done       missinggo.Event
 }
 
 var (
-	srv = HttpServer{}
-	rr = mux.NewRouter()
-	tc *TorrentClient
+	srv   = HttpServer{}
+	rr    = mux.NewRouter()
+	tc    *TorrentClient
 	cache *Cache
 )
 
 func NewHttpServer(torClient *TorrentClient) *HttpServer {
-	if ( srv.configured ) {
+	if srv.configured {
 		return &srv
 	}
 	srv.ListenAddr = GetEnv("TC_HTTPADDR", "0.0.0.0")
 	srv.ListenPort, _ = strconv.ParseInt(GetEnv("TC_HTTPPORT", "3003"), 10, 64)
-	cache = NewCache( GetEnv("TC_CACHEDIR", "./cache"))
+	cache = NewCache(GetEnv("TC_CACHEDIR", "./cache"))
 	srv.configured = true
 	srv.r = rr
 	srv.tc = torClient
@@ -64,12 +64,12 @@ func NewHttpServer(torClient *TorrentClient) *HttpServer {
 }
 
 type httpE struct {
-	Error string    `json:"error"`
+	Error string `json:"error"`
 }
 
 func httpError(w http.ResponseWriter, status int, f string, v ...interface{}) (msg string) {
-	msg = fmt.Sprintf(f, v ...)
-	_je, _ := json.Marshal( httpE{ Error: msg } )
+	msg = fmt.Sprintf(f, v...)
+	_je, _ := json.Marshal(httpE{Error: msg})
 	log.Error(string(_je))
 	w.WriteHeader(status)
 	w.Header().Set("Content-Type", "application/json")
@@ -77,14 +77,14 @@ func httpError(w http.ResponseWriter, status int, f string, v ...interface{}) (m
 	return msg
 }
 
-func doGet(req string) (data []byte, magnet string, err error){
+func doGet(req string) (data []byte, magnet string, err error) {
 	baseUrl, err := url.Parse(req)
 	magnet = ""
 	if err != nil {
 		err = newError("Failed to parse url: %v", err)
 		return
 	}
-	cl := http.Client{ CheckRedirect: func(req *http.Request, via []*http.Request) error {
+	cl := http.Client{CheckRedirect: func(req *http.Request, via []*http.Request) error {
 		if strings.HasPrefix(req.URL.Scheme, "magnet") {
 			log.Debug("redirected to %s", req.URL.Scheme)
 			magnet = req.URL.String()
@@ -125,9 +125,9 @@ func (s *HttpServer) Start() {
 
 func loggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		q,_ := url.QueryUnescape(r.URL.RequestURI())
+		q, _ := url.QueryUnescape(r.URL.RequestURI())
 		log.Debug("< " + r.Method + " " + q)
-//		log.Debug(r.RequestURI)
+		//		log.Debug(r.RequestURI)
 		for k, v := range r.Header {
 			log.Trace(fmt.Sprintf("    '%s' : '%s'", k, v))
 		}
@@ -146,7 +146,7 @@ func _Home(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprint(w, "<html><pre>")
-	err := rr.Walk( func(route *mux.Route, router *mux.Router, ancestor []*mux.Route) error {
+	err := rr.Walk(func(route *mux.Route, router *mux.Router, ancestor []*mux.Route) error {
 		pathTemplate, err := route.GetPathTemplate()
 		if err == nil {
 			fmt.Fprintln(w, "ROUTE:", pathTemplate)
@@ -177,9 +177,9 @@ func _Home(w http.ResponseWriter, r *http.Request) {
 
 func _List(w http.ResponseWriter, r *http.Request) {
 	rc := struct {
-		Torrents []TorrentInfo  `json:"Torrents"`
-	} {
-		Torrents:  make([]TorrentInfo, 0),
+		Torrents []TorrentInfo `json:"Torrents"`
+	}{
+		Torrents: make([]TorrentInfo, 0),
 	}
 	for _, tu := range tc.GetTorrents() {
 		td := tu.TorrentInfo()
@@ -189,9 +189,9 @@ func _List(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(rc)
 
 	//
-//	buf := bytes.NewBufferString("")
-//	tc.tc.WriteStatus(buf)
-//	log.Debug("\n%s", buf.String())
+	//	buf := bytes.NewBufferString("")
+	//	tc.tc.WriteStatus(buf)
+	//	log.Debug("\n%s", buf.String())
 }
 
 func _torrentFileList(w http.ResponseWriter, r *http.Request) {
@@ -202,7 +202,7 @@ func _torrentFileList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	log.Info("GetTorrent '%s'", tname)
-	tor,_ := tc.GetTorrent(tname)
+	tor, _ := tc.GetTorrent(tname)
 	if tor == nil {
 		if link = r.FormValue("link"); link == "" {
 			log.Error(httpError(w, http.StatusBadRequest, "link is missing"))
@@ -224,18 +224,18 @@ func _torrentFileList(w http.ResponseWriter, r *http.Request) {
 			"source": "kodi",
 		}
 		tor, err = tc.AddTorrentFromData(tc.KodiCategory, tname, metainfo, tags)
-		if err != nil {
+		if tor == nil && err != nil {
 			log.Error(httpError(w, http.StatusBadRequest, "AddTorrentFromData: %s failed: %v", tname, err))
 			return
 		}
 	}
 	jrc, err := json.Marshal(tor.TorrentInfo())
 	if err != nil {
-		log.Error(httpError(w, http.StatusInternalServerError, "couldn't convert to json " + err.Error()))
+		log.Error(httpError(w, http.StatusInternalServerError, "couldn't convert to json "+err.Error()))
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	w.Write( jrc )
+	w.Write(jrc)
 }
 
 func _torrentStatus(w http.ResponseWriter, r *http.Request) {
@@ -245,7 +245,7 @@ func _torrentStatus(w http.ResponseWriter, r *http.Request) {
 		log.Error(httpError(w, http.StatusBadRequest, "missing torrent name"))
 		return
 	}
-	tu,_ := tc.GetTorrent(name)
+	tu, _ := tc.GetTorrent(name)
 	if tu == nil {
 		log.Error(httpError(w, http.StatusBadRequest, "failed to find torrent '%s'", name))
 		return
@@ -265,11 +265,11 @@ func _playPrepare(w http.ResponseWriter, r *http.Request) {
 	}
 	fname, ok := vars["file"]
 	if !ok {
-		log.Error(httpError(w, http.StatusBadRequest, "missing file name for '%v'",name))
+		log.Error(httpError(w, http.StatusBadRequest, "missing file name for '%v'", name))
 		return
 	}
-	fname,_ = url.QueryUnescape(fname)
-	tu,_ := tc.GetTorrent(name)
+	fname, _ = url.QueryUnescape(fname)
+	tu, _ := tc.GetTorrent(name)
 	if tu == nil {
 		log.Error(httpError(w, http.StatusBadRequest, "failed to find torrent '%v'", name))
 		return
@@ -296,15 +296,15 @@ func _Play(w http.ResponseWriter, r *http.Request) {
 		log.Error(httpError(w, http.StatusBadRequest, "missing torrent name"))
 		return
 	}
-	name,_ = url.QueryUnescape(name)
+	name, _ = url.QueryUnescape(name)
 	fname, ok := vars["file"]
 	if !ok {
 		log.Error(httpError(w, http.StatusBadRequest, "missing file name for '%s'", name))
 		return
 	}
 
-	fname,_ = url.QueryUnescape(fname)
-	tu,_ := tc.GetTorrent(name)
+	fname, _ = url.QueryUnescape(fname)
+	tu, _ := tc.GetTorrent(name)
 	if tu == nil {
 		log.Error(httpError(w, http.StatusBadRequest, "failed to find torrent '%s'", name))
 		return
@@ -319,13 +319,12 @@ func _Play(w http.ResponseWriter, r *http.Request) {
 	// play
 	if r.Method == "HEAD" {
 		w.Header().Set("Content-Type", "video/mp4")
-		w.Header().Set("Content-Length", strconv.FormatInt(file.file.Length(),10))
+		w.Header().Set("Content-Length", strconv.FormatInt(file.file.Length(), 10))
 		w.Header().Set("Accept-Ranges", "bytes")
 		w.Header().Set("Connection", "Keep-Alive")
 		w.Write([]byte(" "))
 		return
 	}
-
 
 	if r.Method == "GET" {
 		tc.PauseNotInPlay()
@@ -351,7 +350,7 @@ func _Play(w http.ResponseWriter, r *http.Request) {
 
 func _tagTorrent(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
-		log.Error(httpError(w, http.StatusInternalServerError, "failed to parse form " + err.Error()))
+		log.Error(httpError(w, http.StatusInternalServerError, "failed to parse form "+err.Error()))
 		return
 	}
 	vars := mux.Vars(r)
@@ -360,14 +359,14 @@ func _tagTorrent(w http.ResponseWriter, r *http.Request) {
 		log.Error(httpError(w, http.StatusBadRequest, "missing torrent name"))
 		return
 	}
-	tname,_ = url.QueryUnescape(tname)
-	tu,_ := tc.GetTorrent(tname)
+	tname, _ = url.QueryUnescape(tname)
+	tu, _ := tc.GetTorrent(tname)
 	if tu == nil {
 		log.Error(httpError(w, http.StatusBadRequest, "failed to find torrent %s", tname))
 		return
 	}
-	tags := make(Tags,0)
-	for k,v := range r.Form {
+	tags := make(Tags, 0)
+	for k, v := range r.Form {
 		tags.Set(k, v[0])
 	}
 	log.Debug("tag: %s -> %v", tname, tags)
@@ -381,7 +380,6 @@ func _watchLaterList(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-
 func _ApiTmdb(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		log.Error(httpError(w, http.StatusBadRequest, "Failed to parse form. bad request?"))
@@ -390,10 +388,10 @@ func _ApiTmdb(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	key := q.Encode()
 
-	ttl := 5*time.Minute
+	ttl := 5 * time.Minute
 	if q.Get("ttl") != "" {
-		v,_ := strconv.Atoi(q.Get("ttl"))
-		ttl = time.Duration(v)*time.Minute
+		v, _ := strconv.Atoi(q.Get("ttl"))
+		ttl = time.Duration(v) * time.Minute
 		q.Del("ttl")
 	}
 	path := q.Get(`path`)
@@ -411,17 +409,17 @@ func _ApiTmdb(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// proxy request
-	req,err := http.NewRequest("GET", TMDB_URL + path, nil)
+	req, err := http.NewRequest("GET", TMDB_URL+path, nil)
 	if err != nil {
 		log.Error(httpError(w, http.StatusInternalServerError, err.Error()))
 		return
 	}
-	q.Add(`api_key`,tmdb_API_KEY)
+	q.Add(`api_key`, tmdb_API_KEY)
 	q.Add(`include_adult`, "false")
 	req.URL.RawQuery = q.Encode()
 	log.Debug("proxy request to %v", req.URL.String())
 
-	resp,err := http.DefaultClient.Do(req)
+	resp, err := http.DefaultClient.Do(req)
 	if resp.StatusCode != http.StatusOK || err != nil {
 		err = newError("Bad response " + resp.Status)
 	}
@@ -429,7 +427,7 @@ func _ApiTmdb(w http.ResponseWriter, r *http.Request) {
 		log.Error(httpError(w, http.StatusInternalServerError, err.Error()))
 		return
 	}
-	data,err = ioutil.ReadAll(resp.Body)
+	data, err = ioutil.ReadAll(resp.Body)
 	if err != nil {
 		log.Error(httpError(w, http.StatusInternalServerError, err.Error()))
 		return

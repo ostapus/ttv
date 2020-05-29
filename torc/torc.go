@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -120,18 +121,32 @@ func (c *TorrentClient) fileWatcher() {
 		log.Info("%v", ev)
 		switch ev.Op {
 		case CategoryCreated:
-			c.wg.Add(1)
-			go c.AddTorrentFilesFromCategoryDir(ev.Category)
+			log.Info("scan torrents for %s in %s", ev.Category.name, ev.Category.fullpath)
+			files, _ := ioutil.ReadDir(ev.Category.fullpath)
+			for _, file := range files {
+				if file.IsDir() || strings.HasSuffix(file.Name(), ".yaml") {
+					continue
+				}
+				fullpath := filepath.Join(ev.Category.fullpath, file.Name())
+				c.AddTorrentFromFile(ev.Category, file.Name(), fullpath)
+			}
 		case CategoryRemoved:
-			log.Error("category %s has been removed, can't handle.. aborting client", ev.Category.name)
-			c.Close()
+			log.Error("category %s has been removed, can't handle.. just ignoreing event", ev.Category.name)
+			// c.Close()
 		case CategoryLoaded:
 			log.Info("CategoryLoading is done")
-
+			close(c.loadDone)
 		case TorrentFileCreated:
 			if strings.HasSuffix(ev.File, ".yaml") {
-				if tu, _ := c.GetTorrent(ev.FullPath); tu != nil {
-					tu.LoadTags()
+				if tags := ReadTagsFromFile(ev.FullPath); tags != nil {
+					if tu, _ := c.GetTorrent(tags.getString("infohash", "there_were_no_infohash")); tu != nil {
+						log.Debug("Reloading tags for %s", tu.Name)
+						tu.LoadTags()
+						tu.ClearTags()
+						tu.SetTags(tags)
+						tu.Tags.Validate("TorrentFileCreated force validate")
+						log.Trace("%s tags are:\n%s", tu.Name, tu.Tags.String())
+					}
 				}
 			} else {
 				c.AddTorrentFromFile(ev.Category, ev.File, ev.FullPath)
@@ -140,8 +155,6 @@ func (c *TorrentClient) fileWatcher() {
 			if strings.HasSuffix(ev.File, ".torrent") {
 				log.Error("%s deleted, marking to remove from client", ev.File)
 				if tud, _ := c.GetTorrent(ev.FullPath); tud != nil {
-					c.lock.Lock()
-					defer c.lock.Unlock()
 					tud.Tags.SetIfNew("delete_it", "yes")
 					c.ProcessTags()
 				}
@@ -156,7 +169,8 @@ func (c *TorrentClient) Start() {
 
 	go func() {
 		log.Info("watiting on Initial scan to be done")
-		c.wg.Wait()
+		//c.wg.Wait()
+		<-c.loadDone
 		log.Info("initial scan is done, starting loop")
 		for {
 			time.Sleep(30 * time.Second)
@@ -218,9 +232,8 @@ func (c *TorrentClient) AddTorrentFromFile(cat *tCategory, filename string, full
 	if tud, err = c.AddTorrentFromData(cat.name, filename, info, &Tags{}); err != nil {
 		return
 	}
-	tags := tud.LoadTags()
-	tags.SetIfNew("source", "from_file")
-	tud.SetTags(tags)
+	tud.LoadTags()
+	tud.Tags.SetIfNew("source", "from_file")
 	log.Debug("Verifying data for %s", tud.Name)
 	tud.torrent.VerifyData()
 	log.Debug("Verifying data for %s is done", tud.Name)
@@ -247,6 +260,7 @@ func (c *TorrentClient) AddTorrentFromData(cat string, name string, info []byte,
 
 	if tud, _ = c.GetTorrent(hash); tud != nil {
 		log.Trace("%s already added, skipping", tud.Name)
+		err = newError("%s already added", tud.Name)
 		return
 	}
 	pcat := GetCategoryOrDefault(cat, c.KodiCategory)
@@ -302,25 +316,6 @@ func (c *TorrentClient) AddTorrentFromData(cat string, name string, info []byte,
 	tud.SyncFiles()
 	log.Info("%s added to client", tud.Name)
 	return
-}
-
-func (c *TorrentClient) AddTorrentFilesFromCategoryDir(cat *tCategory) {
-	c.miscLock.Lock()
-	defer c.miscLock.Unlock()
-	defer c.wg.Done()
-	log.Info("scan torrents for %s in %s", cat.name, cat.fullpath)
-	files, _ := ioutil.ReadDir(cat.fullpath)
-	for _, file := range files {
-		if strings.HasSuffix(file.Name(), ".yaml") {
-			continue
-		}
-		notify <- Event{
-			Category: cat,
-			Op:       TorrentFileCreated,
-			File:     file.Name(),
-			FullPath: path.Join(cat.fullpath, file.Name()),
-		}
-	}
 }
 
 func (c *TorrentClient) GetTorrents() []*TorrentWithUserData {

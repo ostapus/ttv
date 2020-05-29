@@ -2,11 +2,13 @@ package torc
 
 import "C"
 import (
+	"fmt"
 	tt "github.com/anacrolix/torrent"
 	"github.com/anacrolix/torrent/metainfo"
 	"gopkg.in/yaml.v2"
 	"io/ioutil"
 	"os"
+	"strconv"
 	"time"
 )
 
@@ -35,6 +37,7 @@ type TorrentWithUserData struct {
 	unpaused            time.Time
 	unpaused_downloaded int64
 	dl_rate             int
+	upload_bytes_init   int64
 	//
 	torrent  *tt.Torrent
 	Category string
@@ -43,7 +46,7 @@ type TorrentWithUserData struct {
 	Paused        bool
 	ForceDownload bool
 	InfoReady     bool
-	Tags          Tags
+	Tags          *Tags
 }
 
 func NewTorrentWithUserData(tags *Tags) *TorrentWithUserData {
@@ -63,7 +66,7 @@ func (tu *TorrentWithUserData) AddTags(tags *Tags) {
 }
 
 func (tu *TorrentWithUserData) ClearTags() {
-	tu.Tags = make(Tags, 0)
+	tu.Tags = &Tags{}
 }
 
 func (tu *TorrentWithUserData) SetTags(tags *Tags) {
@@ -92,10 +95,10 @@ func (tu *TorrentWithUserData) SaveTorrent() {
 	tu.Tags.SetIfNew("torrent_saved", "yes")
 }
 
-func (tu *TorrentWithUserData) LoadTags() (tags *Tags) {
+func (tu *TorrentWithUserData) LoadTags() {
 	pathname := tu.Tags.getString("tags_fullpath", "")
 	log.Debug("loading tags from %s", pathname)
-	tags = &Tags{}
+	tags := &Tags{}
 	if data, err := ioutil.ReadFile(pathname); err == nil {
 		if err := yaml.Unmarshal(data, tags); err != nil {
 			log.Error("failed to yaml.Unmarshal: %v : %v", pathname, err)
@@ -105,10 +108,10 @@ func (tu *TorrentWithUserData) LoadTags() (tags *Tags) {
 	log.Debug("\n%s", tags.String())
 	if len(*tags) <= 0 {
 		log.Warn("tags length %s is 0, keep old", pathname)
-		return &tu.Tags
+		return
 	}
-	tu.Tags.Validate()
-	return
+	tu.Tags = tags
+	tu.Tags.Validate("force Validate after LoadTags")
 }
 
 func (tu *TorrentWithUserData) SaveTags() {
@@ -117,7 +120,7 @@ func (tu *TorrentWithUserData) SaveTags() {
 		log.Trace("%s tags already saved, there were no changes", tu.Name)
 		return
 	}
-	tu.Tags.Validate()
+	tu.Tags.Validate("force Validated after SaveTags")
 	pathname := tu.Tags.getString("tags_fullpath", "")
 	log.Debug("%s -> %s", tu.Name, pathname)
 	if pathname == "" {
@@ -182,7 +185,7 @@ func (tu *TorrentWithUserData) TorrentInfo() (info TorrentInfo) {
 		BytesUploaded:   st.BytesWrittenData.Int64(),
 		Paused:          tu.Paused,
 		OpenPlays:       tu.ActiveReaders(),
-		Tags:            tu.Tags,
+		Tags:            *tu.Tags,
 		Completion:      tu.Completion(),
 		DownloadRate:    tu.dl_rate,
 	}
@@ -364,7 +367,8 @@ func (tu *TorrentWithUserData) ProcessTags() {
 	}
 	// populate some info
 	info := tu.TorrentInfo()
-	tu.Tags.Set("BytesUploaded", info.BytesUploaded)
+	bytes, _ := strconv.ParseInt(tu.Tags.getString("upload_bytes", "0"), 10, 64)
+	tu.Tags.Set("upload_bytes", fmt.Sprintf("%d", info.BytesUploaded+bytes))
 	//
 	tu.SaveTags()
 
@@ -416,7 +420,7 @@ func (tu *TorrentWithUserData) ProcessTags() {
 		//	return
 		//}
 		tu.Tags.Set("delete_data", "yes")
-		log.Trace("view only torrent, older than 5 hours. drop")
+		log.Trace("%s view only torrent, older than 5 hours. drop", tu.Name)
 		tu.Drop("view only kodi")
 	}
 

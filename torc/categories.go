@@ -56,7 +56,10 @@ func init() {
 
 func NewCategoryWatcher(dir string) chan Event {
 	notify = make(chan Event)
-	go scanCategories(dir)
+	go func() {
+		scanCategories(dir)
+		notify <- Event{Op: CategoryLoaded}
+	}()
 	return notify
 }
 
@@ -93,9 +96,6 @@ func scanCategories(dir string) {
 		if st, err := os.Stat(basedir); !(err == nil && st.IsDir()) {
 			panic(log.Error("torrentsDir '%s' doesn't exists or not directory", basedir))
 		}
-		if err := fsw.Add(basedir); err != nil {
-			panic(log.Error("failed to fswatcher.add %s: %v", basedir, err))
-		}
 	}
 
 	// scan for new categories
@@ -111,26 +111,34 @@ func scanCategories(dir string) {
 				name:     e.Name(),
 				fullpath: path.Join(basedir, e.Name()),
 				download: path.Join(basedir, e.Name(), "downloads"),
-				ready:    false,
+				ready:    true,
 			}
 			categories[e.Name()] = _c
-			if err := fsw.Add(_c.fullpath); err != nil {
-				panic(log.Error("failed to fswatcher.add %s: %v", _c.fullpath, err))
-			}
 		}
 
 		if st, err := os.Stat(_c.download); !(err == nil && st.IsDir()) {
 			log.Error("category %s has no downloads %s . ignoring for now", _c.name, _c.download)
+			_c.ready = false
 			continue
 		}
+		onCategoryCreated(_c)
 	}
+
+	// create watchers
+	log.Debug("watching root dir: %s", basedir)
+	if err := fsw.Add(basedir); err != nil {
+		panic(log.Error("failed to fswatcher.add %s: %v", basedir, err))
+	}
+
 	for _, v := range categories {
-		if !v.ready {
-			v.ready = true
-			onCategoryCreated(v)
+		if err := fsw.Add(v.fullpath); err != nil {
+			panic(log.Error("failed to fswatcher.add %s: %v", v.fullpath, err))
 		}
+		log.Debug("watching for %s", v.fullpath)
 	}
-	notify <- Event{Op: CategoryLoaded}
+	//
+
+	log.Debug("done")
 }
 
 func findCategoryByPath(path string) (category *tCategory, isDownloadDir bool, filePart string) {
@@ -150,6 +158,7 @@ func findCategoryByPath(path string) (category *tCategory, isDownloadDir bool, f
 			return v, false, strings.TrimPrefix(filePart, "/")
 		}
 	}
+	log.Debug("not found in categories")
 	return nil, false, ""
 }
 
@@ -220,7 +229,7 @@ func fswEvent() {
 				}
 				if st.IsDir() {
 					log.Debug("new directory on category level, run rescan")
-					scanCategories("")
+					scanCategories(basedir)
 					continue
 				}
 
