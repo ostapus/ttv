@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 func GetEnv(name string, def string) string {
@@ -20,6 +21,34 @@ func GetEnv(name string, def string) string {
 	}
 	log.Debug("%s='%s'", name, v)
 	return v
+}
+
+func getTrackerList() (rc [][]string) {
+	url := "https://trackerslist.com/best.txt"
+	log.Trace("Getting TrackerList from %s", url)
+	resp, err := http.Get(url)
+	list := make([]string, 0)
+	if err != nil {
+		log.Error("failed to get from %v: %v", url, err)
+	} else {
+		defer resp.Body.Close()
+		data, err := ioutil.ReadAll(resp.Body)
+		if err == nil {
+			for _, v := range strings.Split(string(data), "\n") {
+				if len(v) > 0 && (strings.HasPrefix(v, "http") || strings.HasPrefix(v, "udp")) {
+					list = append(list, v)
+				}
+			}
+		} else {
+			log.Error("failed to get from err: %v %v -> '%v'", err, url, data)
+		}
+	}
+	rc = make([][]string, 0)
+	if len(list) > 5 {
+		rc = append(rc, list)
+	}
+	log.Trace("Loaded trackers : %v", len(rc))
+	return rc
 }
 
 func getExternalIP() string {
@@ -108,10 +137,22 @@ func (t Tags) getInt64(name string, defval int64) int64 {
 	return v.(int64)
 }
 
+func (t Tags) getTime(name string, defval time.Time) time.Time {
+	v, ok := t[name]
+	if !ok {
+		return defval
+	}
+	_time, err := time.Parse(time.RFC822, v.(string))
+	if err != nil {
+		return defval
+	}
+	return _time
+}
+
 func (t Tags) Set(name string, value interface{}) {
 	oval := t[name]
-	t[name] = value
 	if oval != value {
+		t[name] = value
 		t.Invalidate(fmt.Sprintf("%s: %v != %v, tags are invalidated", name, oval, value))
 	}
 }

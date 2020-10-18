@@ -55,7 +55,7 @@ func init() {
 }
 
 func NewCategoryWatcher(dir string) chan Event {
-	notify = make(chan Event)
+	notify = make(chan Event, 5)
 	go func() {
 		scanCategories(dir)
 		notify <- Event{Op: CategoryLoaded}
@@ -187,76 +187,87 @@ func onFileCreated(cat *tCategory, fullpath string, file string) {
 	if !IsValidTorrentFile(fullpath, true) {
 		return
 	}
-	log.Debug("%v: %s -> %s", cat, fullpath, file)
+	log.Debug("%v: %s -> %s, channel len: %v/%v", cat, fullpath, file, len(notify), cap(notify))
 	notify <- Event{Category: cat, Op: TorrentFileCreated, File: file, FullPath: fullpath}
+	log.Debug("event fired")
+}
+
+var (
+	writes = make(map[string]*time.Timer, 0)
+)
+
+func processFswEvent(event fsnotify.Event) {
+	log.Trace("fs event %v", event)
+	if strings.HasPrefix(event.Name, ".") {
+		log.Trace("ignoring 'hidden' name: %s", event.Name)
+		return
+	}
+
+	switch event.Op {
+	case fsnotify.Rename:
+		fallthrough
+	case fsnotify.Remove:
+		if cat, isdd, file := findCategoryByPath(event.Name); cat == nil {
+			log.Warn("file/dir %s removed from watched dirs, but no category found", event.Name)
+		} else if isdd {
+			log.Debug("%s: download dir is removed %s", cat.name, cat.download)
+			onCategoryRemoved(cat)
+		} else if file != "" {
+			onFileRemoved(cat, event.Name, file)
+		} else {
+			onCategoryRemoved(cat)
+			_ = fsw.Remove(cat.fullpath)
+			delete(categories, cat.name)
+		}
+
+	case fsnotify.Create:
+		fallthrough
+	case fsnotify.Write:
+		st, err := os.Stat(event.Name)
+		if err != nil {
+			log.Warn("%s (%v): stat failed. ignore", event.Name, err)
+			return
+		}
+		if st.IsDir() {
+			log.Debug("new directory on category level, run rescan")
+			scanCategories(basedir)
+			return
+		}
+
+		if !(strings.HasSuffix(event.Name, ".torrent") ||
+			strings.HasSuffix(event.Name, ".magnet") ||
+			strings.HasSuffix(event.Name, ".yaml")) {
+			log.Trace("ignore unknown extension. not torrent/magnet/yaml: %s", event.Name)
+			return
+		}
+		timer, ok := writes[event.Name]
+		log.Trace("starting/extending 2 sec timer on WRITE for '%s', timer: %v, exists: %v", event.Name, timer, ok)
+		if ok && timer != nil {
+			log.Trace("timer exists for '%s', stopping this, starting new", event.Name)
+			timer.Stop()
+		}
+		writes[event.Name] = time.AfterFunc(time.Second*2, func() {
+			if cat, _, file := findCategoryByPath(event.Name); cat == nil {
+				log.Warn("file %s done WRITES, but no category found", event.Name)
+			} else if file == "" {
+				log.Warn("file %s done WRITES, findCategory said is not file", event.Name)
+			} else {
+				log.Trace("WRITE timer expires, firing onFileCreated event: '%s'", file)
+				onFileCreated(cat, event.Name, file)
+			}
+			writes[event.Name] = nil
+		})
+	}
 }
 
 func fswEvent() {
-	writes := make(map[string]*time.Timer, 0)
 	for {
 		select {
 		case event := <-fsw.Events:
-			log.Trace("fs event %v", event)
-			if strings.HasPrefix(event.Name, ".") {
-				log.Trace("ignoring 'hidden' name: %s", event.Name)
-				continue
-			}
+			processFswEvent(event)
 
-			switch event.Op {
-			case fsnotify.Rename:
-				fallthrough
-			case fsnotify.Remove:
-				if cat, isdd, file := findCategoryByPath(event.Name); cat == nil {
-					log.Warn("file/dir %s removed from watched dirs, but no category found", event.Name)
-				} else if isdd {
-					log.Debug("%s: download dir is removed %s", cat.name, cat.download)
-					onCategoryRemoved(cat)
-				} else if file != "" {
-					onFileRemoved(cat, event.Name, file)
-				} else {
-					onCategoryRemoved(cat)
-					_ = fsw.Remove(cat.fullpath)
-					delete(categories, cat.name)
-				}
-
-			case fsnotify.Create:
-				fallthrough
-			case fsnotify.Write:
-				st, err := os.Stat(event.Name)
-				if err != nil {
-					log.Warn("%s (%v): stat failed. ignore", event.Name, err)
-					continue
-				}
-				if st.IsDir() {
-					log.Debug("new directory on category level, run rescan")
-					scanCategories(basedir)
-					continue
-				}
-
-				if !(strings.HasSuffix(event.Name, ".torrent") ||
-					strings.HasSuffix(event.Name, ".magnet") ||
-					strings.HasSuffix(event.Name, ".yaml")) {
-					log.Trace("ignore unknown extension. not torrent/magnet/yaml: %s", event.Name)
-					continue
-				}
-				timer, ok := writes[event.Name]
-				if ok {
-					log.Trace("timer exists for %s, cancel", event.Name)
-					timer.Stop()
-				}
-				log.Trace("starting 2 sec timer on WRITE for %s", event.Name)
-				writes[event.Name] = time.AfterFunc(time.Second*2, func() {
-					if cat, _, file := findCategoryByPath(event.Name); cat == nil {
-						log.Warn("file %s done WRITES, but no category found", event.Name)
-					} else if file == "" {
-						log.Warn("file %s done WRITES, findCategory said is not file", event.Name)
-					} else {
-						onFileCreated(cat, event.Name, file)
-					}
-				})
-			}
 		case err := <-fsw.Errors:
-			panic(log.Error("basDirWatcher error: %v", err))
+			panic(log.Error("baseDirWatcher error: %v", err))
 		}
 	}
 }

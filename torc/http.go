@@ -216,8 +216,11 @@ func _torrentFileList(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if magnet != "" {
-			log.Error(httpError(w, http.StatusBadRequest, "MAGNET is not supported yet/again"))
-			return
+			log.Debug("Loading metainfo for magnet: %s", magnet)
+			if metainfo, err = tc.LoadMetaInfoFromMagnet(magnet); err != nil {
+				log.Error(httpError(w, http.StatusBadRequest, "failed lot load metadata for magnet: %s", err))
+				return
+			}
 		}
 
 		tags := &Tags{

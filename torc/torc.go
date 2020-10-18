@@ -3,6 +3,7 @@ package torc
 import "C"
 import (
 	"bytes"
+	alog "github.com/anacrolix/log"
 	tt "github.com/anacrolix/torrent"
 	"github.com/anacrolix/torrent/metainfo"
 	"github.com/anacrolix/torrent/storage"
@@ -27,7 +28,7 @@ type TorrentClient struct {
 	tc       *tt.Client
 	cfg      *tt.ClientConfig
 	cw       chan Event
-	loadDone chan bool
+	LoadDone chan bool
 	//
 	configured      bool
 	DbDir           string
@@ -38,12 +39,11 @@ type TorrentClient struct {
 	ExternalPort    int
 	ExternalAddr    string
 	KodiCategory    string
+	Trackers        [][]string
 	//
 	torrents []*TorrentWithUserData
 	//
-	lock     sync.Mutex
-	miscLock sync.Mutex
-	wg       sync.WaitGroup
+	lock sync.Mutex
 }
 
 func NewTorrentClient(logger *logger.Log) *TorrentClient {
@@ -62,10 +62,6 @@ func NewTorrentClient(logger *logger.Log) *TorrentClient {
 		torClient.ExternalAddr = getExternalIP()
 		torClient.ExternalPort = getExternalPort(torClient.PortForwardFile)
 		torClient.torrents = make([]*TorrentWithUserData, 0)
-		//
-		torClient.cw = NewCategoryWatcher(torClient.TorrentsDir)
-		torClient.loadDone = make(chan bool)
-		go torClient.fileWatcher()
 
 		torClient.cfg = tt.NewDefaultClientConfig()
 		torClient.cfg.DefaultStorage = storage.NewFileWithCustomPathMaker(torClient.DbDir, customPathMaker)
@@ -75,6 +71,7 @@ func NewTorrentClient(logger *logger.Log) *TorrentClient {
 		//
 		torClient.cfg.ListenPort = torClient.ExternalPort
 		torClient.cfg.PublicIp4 = net.ParseIP(torClient.ExternalAddr)
+		torClient.Trackers = getTrackerList()
 		//
 		torClient.cfg.Debug = false
 		torClient.cfg.DisableIPv6 = true
@@ -83,11 +80,18 @@ func NewTorrentClient(logger *logger.Log) *TorrentClient {
 		if torClient.ExternalPort == 0 {
 			torClient.ExternalPort = 16882
 		}
-		if c, err := tt.NewClient(torClient.cfg); err != nil {
+		torClient.cfg.Logger = torClient.cfg.Logger.FilterLevel(alog.Info)
+		if c, err := tt.NewClient(torClient.cfg); err != nil || c == nil {
 			panic(log.Error("failed to create client: %v", err))
 		} else {
 			torClient.tc = c
 		}
+
+		//
+		torClient.cw = NewCategoryWatcher(torClient.TorrentsDir)
+		torClient.LoadDone = make(chan bool)
+		go torClient.fileWatcher()
+
 	}
 	return &torClient
 }
@@ -95,6 +99,12 @@ func NewTorrentClient(logger *logger.Log) *TorrentClient {
 func monitorExternalAddrPort() {
 	for {
 		time.Sleep(time.Hour)
+
+		trackers := getTrackerList()
+		if len(trackers) > 5 {
+			torClient.Trackers = trackers
+		}
+
 		newAddr := getExternalIP()
 		newPort := getExternalPort(torClient.PortForwardFile)
 		if (newAddr != "" && newPort != 0) && (newAddr != torClient.ExternalAddr || newPort != torClient.ExternalPort) {
@@ -117,8 +127,9 @@ func (c *TorrentClient) Close() {
 
 func (c *TorrentClient) fileWatcher() {
 	for {
+		log.Debug("waiting for file events: len/cap: %v/%v", len(c.cw), cap(c.cw))
 		ev := <-c.cw
-		log.Info("%v", ev)
+		log.Info("%v, len/cap: %v/%v", ev, len(c.cw), cap(c.cw))
 		switch ev.Op {
 		case CategoryCreated:
 			log.Info("scan torrents for %s in %s", ev.Category.name, ev.Category.fullpath)
@@ -128,16 +139,29 @@ func (c *TorrentClient) fileWatcher() {
 					continue
 				}
 				fullpath := filepath.Join(ev.Category.fullpath, file.Name())
-				c.AddTorrentFromFile(ev.Category, file.Name(), fullpath)
+				_, _ = c.AddTorrentFromFile(ev.Category, file.Name(), fullpath)
 			}
 		case CategoryRemoved:
 			log.Error("category %s has been removed, can't handle.. just ignoreing event", ev.Category.name)
 			// c.Close()
 		case CategoryLoaded:
 			log.Info("CategoryLoading is done")
-			close(c.loadDone)
+			close(c.LoadDone)
 		case TorrentFileCreated:
+			log.Trace("processing %s", ev.FullPath)
 			if strings.HasSuffix(ev.File, ".yaml") {
+				if tu, _ := c.GetTorrent(ev.FullPath); tu != nil {
+					log.Trace("found name from yaml: %s: ignore_till: %v, now: %v, diff: %v", ev.FullPath,
+						tu.ignore_yml_write.Second(), time.Now().Second(), tu.ignore_yml_write.Sub(time.Now()).Seconds())
+					if tu.ignore_yml_write.After(time.Now()) {
+						log.Trace("ignored our write to %s", ev.FullPath)
+						continue
+					}
+				} else {
+					log.Trace("%s not found in client", ev.FullPath)
+					continue
+				}
+
 				if tags := ReadTagsFromFile(ev.FullPath); tags != nil {
 					if tu, _ := c.GetTorrent(tags.getString("infohash", "there_were_no_infohash")); tu != nil {
 						log.Debug("Reloading tags for %s", tu.Name)
@@ -149,17 +173,32 @@ func (c *TorrentClient) fileWatcher() {
 					}
 				}
 			} else {
-				c.AddTorrentFromFile(ev.Category, ev.File, ev.FullPath)
+				_, _ = c.AddTorrentFromFile(ev.Category, ev.File, ev.FullPath)
 			}
 		case TorrentFileRemoved:
+			delete_data := false
+			drop_torrent := false
+			if strings.HasSuffix(ev.File, ".tags.yaml") {
+				drop_torrent = true
+			}
 			if strings.HasSuffix(ev.File, ".torrent") {
-				log.Error("%s deleted, marking to remove from client", ev.File)
+				delete_data = true
+				drop_torrent = true
+			}
+			log.Debug("Dropping torrent: %s, drop: %v delete_data: %v", ev.File, drop_torrent, delete_data)
+			if drop_torrent {
 				if tud, _ := c.GetTorrent(ev.FullPath); tud != nil {
-					tud.Tags.SetIfNew("delete_it", "yes")
+					log.Error("%s deleted, marking to remove from client", ev.File)
+					tud.Tags.Set("delete_it", "yes")
+					if delete_data {
+						tud.Tags.Set("delete_data", "yes")
+						tud.Tags.Set("force_delete", "yes")
+					}
 					c.ProcessTags()
 				}
 			}
 		}
+		log.Debug("event processing is complete len/cap: %v/%v", ev, len(c.cw), cap(c.cw))
 	}
 }
 
@@ -170,7 +209,7 @@ func (c *TorrentClient) Start() {
 	go func() {
 		log.Info("watiting on Initial scan to be done")
 		//c.wg.Wait()
-		<-c.loadDone
+		<-c.LoadDone
 		log.Info("initial scan is done, starting loop")
 		for {
 			time.Sleep(30 * time.Second)
@@ -193,8 +232,10 @@ func (c *TorrentClient) GetTorrent(hashOrNameOrIndex interface{}) (tud *TorrentW
 				}
 				if (tu.torrent != nil && tu.torrent.Name() == hashOrName) ||
 					tu.Name == hashOrName ||
-					tu.Tags.getString("infohash", "") == hashOrName ||
-					tu.Tags.getString("fullpath", "wrone_one") == hashOrName {
+					tu.Tags.getString("infohash", "wrong_one") == hashOrName ||
+					tu.Tags.getString("fullpath", "wrong_one") == hashOrName ||
+					tu.Tags.getString("tags_fullpath", "wrong_one") == hashOrName ||
+					tu.Tags.getString("magnet", "wrong_one") == hashOrName {
 					log.Trace("GetTorrent found by string: %s", tu.Name)
 					tud = tu
 					index = i
@@ -210,7 +251,7 @@ func (c *TorrentClient) GetTorrent(hashOrNameOrIndex interface{}) (tud *TorrentW
 			}
 		}
 	}
-	log.Trace("GetTorrent tud_nil: %v index: %v", tud == nil, index)
+	log.Trace("Found: %v index: %v", tud != nil, index)
 	return
 }
 
@@ -297,15 +338,13 @@ func (c *TorrentClient) AddTorrentFromData(cat string, name string, info []byte,
 		err = newError(log.Error("failed to AddTorrent: %v", err))
 		return
 	}
+	if len(c.Trackers) > 5 {
+		tor.AddTrackers(c.Trackers)
+	}
 	<-tor.GotInfo()
 	if tor.Info().Private != nil {
 		tud.Tags.SetIfNew("private", "yes")
-		added := tud.Tags.getString("added", time.Now().Format(time.RFC822))
-		d_added, err := time.Parse(time.RFC822, added)
-		if err != nil {
-			log.Error("failed to parse added date: '%s' : %v, using now", added, err)
-			d_added = time.Now()
-		}
+		d_added := tud.Tags.getTime("added", time.Now())
 		d_expiration := d_added.Add(time.Hour * 24 * 7 * 3)
 		tud.Tags.SetIfNew("seed_until", d_expiration.Format(time.RFC822))
 	}
@@ -316,6 +355,56 @@ func (c *TorrentClient) AddTorrentFromData(cat string, name string, info []byte,
 	tud.SyncFiles()
 	log.Info("%s added to client", tud.Name)
 	return
+}
+
+func (c *TorrentClient) LoadMetaInfoFromMagnet(uri string) (mi []byte, err error) {
+	var bb bytes.Buffer
+	mi = nil
+	err = nil
+	log.Debug("uri: %s", uri)
+	if tt, _ := c.GetTorrent(uri); tt != nil {
+		tt.torrent.Metainfo().Write(&bb)
+		return bb.Bytes(), nil
+	}
+	tags := &Tags{}
+	pcat := GetCategoryOrDefault("magnets", "video")
+	tags.SetIfNew("category", pcat.name)
+	tags.SetIfNew("download", pcat.download)
+	tags.SetIfNew("magnet", uri)
+	tags.SetIfNew("delete_data", "yes")
+	tags.SetIfNew("delete_it", "yes")
+
+	tud := NewTorrentWithUserData(tags)
+	tud.Name = uri
+	tud.c = c
+	done := false
+	for i, v := range c.torrents {
+		if v == nil {
+			done = true
+			c.torrents[i] = tud
+			break
+		}
+	}
+	if !done {
+		c.torrents = append(c.torrents, tud)
+	}
+	_tor, err := c.tc.AddMagnet(uri)
+	if err != nil {
+		log.Error("Failed to AddMagnet: %s", err)
+		return
+	}
+	tud.Tags.Set("infohash", _tor.InfoHash().String())
+	if len(c.Trackers) > 5 {
+		_tor.AddTrackers(c.Trackers)
+	}
+	log.Debug("waiting on metainfo: %s", uri)
+	<-_tor.GotInfo()
+	tud.torrent = _tor
+	tud.Pause()
+	log.Debug("metainfo received %s", uri)
+	_tor.Metainfo().Write(&bb)
+	tud.Drop("magnet info loaded, no need anymore")
+	return bb.Bytes(), nil
 }
 
 func (c *TorrentClient) GetTorrents() []*TorrentWithUserData {
@@ -352,6 +441,9 @@ func (c *TorrentClient) RemoveTorrent(torrentId interface{}) {
 }
 
 func (c *TorrentClient) ProcessTags() {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+
 	for _, tor := range c.torrents {
 		if tor != nil {
 			tor.ProcessTags()

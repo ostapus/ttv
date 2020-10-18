@@ -47,10 +47,16 @@ type TorrentWithUserData struct {
 	ForceDownload bool
 	InfoReady     bool
 	Tags          *Tags
+	//
+	ignore_yml_write   time.Time
+	onstart_downloaded int64
+	onstart_uploaded   int64
 }
 
 func NewTorrentWithUserData(tags *Tags) *TorrentWithUserData {
 	rc := TorrentWithUserData{}
+	rc.onstart_downloaded = -1
+	rc.onstart_uploaded = -1
 	rc.ClearTags()
 	rc.SetTags(tags)
 	return &rc
@@ -76,6 +82,10 @@ func (tu *TorrentWithUserData) SetTags(tags *Tags) {
 }
 
 func (tu *TorrentWithUserData) SaveTorrent() {
+	if tu.Tags.getString("torrent_saved", "no") == "yes" {
+		return
+	}
+
 	tfile := tu.Tags.getString("fullpath", "")
 	log.Debug("%s -> %s", tu.Name, tfile)
 	if tfile == "" {
@@ -92,7 +102,7 @@ func (tu *TorrentWithUserData) SaveTorrent() {
 		log.Error("Failed to Metainfo.Write: %s - %s", tu.Name, err)
 		return
 	}
-	tu.Tags.SetIfNew("torrent_saved", "yes")
+	tu.Tags.Set("torrent_saved", "yes")
 }
 
 func (tu *TorrentWithUserData) LoadTags() {
@@ -127,6 +137,8 @@ func (tu *TorrentWithUserData) SaveTags() {
 		log.Error("tag: tags_fullpath is '' - %v", tu.Tags)
 		return
 	}
+	// ignore file events for yml for next 4 seconds, due our own write
+	tu.ignore_yml_write = time.Now().Add(time.Second * 4)
 	data, err := yaml.Marshal(&tu.Tags)
 	if err != nil {
 		log.Error("failed to yaml.Marshal: %v : %v", pathname, err)
@@ -269,6 +281,8 @@ func (tu *TorrentWithUserData) TrackProgress() {
 	s := tu.torrent.SubscribePieceStateChanges()
 	go func() {
 		for {
+			max_rate := 0
+			max_seeders := 0
 			completed := tu.Completed()
 			_v := <-s.Values
 			log.Trace("TrackProgressFunc: s.Values: %v", _v)
@@ -281,6 +295,15 @@ func (tu *TorrentWithUserData) TrackProgress() {
 				log.Trace("TrackProgressFunc: %s, piece %d completed", tu.Name, v.Index)
 				tdelta := time.Now().Sub(tu.unpaused).Seconds()
 				tu.dl_rate = int(float64(tu.torrent.BytesCompleted()-tu.unpaused_downloaded) / tdelta)
+				if max_rate < tu.dl_rate {
+					max_rate = tu.dl_rate
+				}
+				info := tu.TorrentInfo()
+				if max_seeders < info.Seeders {
+					max_seeders = info.Seeders
+				}
+				tu.Tags.Set("max_rate", max_rate)
+				tu.Tags.Set("max_seeders", max_seeders)
 			}
 			if !completed && tu.Completed() {
 				added, _ := time.Parse(time.RFC822, tu.Tags.getString("added", time.Now().Format(time.RFC822)))
@@ -292,7 +315,6 @@ func (tu *TorrentWithUserData) TrackProgress() {
 				s.Close()
 			}
 		}
-
 	}()
 }
 
@@ -312,20 +334,24 @@ func (tu *TorrentWithUserData) CanDelete() (ok bool) {
 		log.Trace("%s can't drop, in play yet", tu.Name)
 		return false
 	}
-	if s := tu.Tags.getString("seed_until", ""); s != "" {
-		log.Trace("%s seed_until is set %s", tu.Name, s)
-		seed_until, err := time.Parse(time.RFC822, s)
-		if err != nil {
-			log.Trace("%s seed_until is %s but failed to parse to date, keep file", tu.Name, s)
-			return false
+	if tu.Tags.getString("force_delete", "no") == "yes" {
+		log.Trace("force_delete is set, no checks anymore")
+	} else {
+		if s := tu.Tags.getString("seed_until", ""); s != "" {
+			log.Trace("%s seed_until is set %s", tu.Name, s)
+			seed_until, err := time.Parse(time.RFC822, s)
+			if err != nil {
+				log.Trace("%s seed_until is %s but failed to parse to date, keep file", tu.Name, s)
+				return false
+			}
+			delta := seed_until.Sub(time.Now())
+			log.Trace("%s delta between seed_until and now %v hours", tu.Name, delta.Hours())
+			if delta.Seconds() > 0 {
+				log.Trace("%s keep seeding, not expired yet", tu.Name)
+				return false
+			}
+			log.Trace("%s private torrent, expired.. keep deleting", tu.Name)
 		}
-		delta := seed_until.Sub(time.Now())
-		log.Trace("%s delta between seed_until and now %v hours", tu.Name, delta.Hours())
-		if delta.Seconds() > 0 {
-			log.Trace("%s keep seeding, not expired yet", tu.Name)
-			return false
-		}
-		log.Trace("%s private torrent, expired.. keep deleting", tu.Name)
 	}
 	log.Info("%s can be deleted", tu.Name)
 	return true
@@ -347,30 +373,55 @@ func (tu *TorrentWithUserData) Drop(reason string) {
 	deleteData := tu.Tags.get("delete_data", "no") == "yes"
 	if deleteData {
 		ddir := tu.Tags.getString("datapath", "/tmp/should_not_exists")
+		if stats, err := os.Stat(ddir); err != nil {
+			log.Info("%s doesn't exists. hmmm", ddir)
+		} else {
+			log.Info("%s exists and isDirectory: %v", ddir, stats.IsDir())
+		}
+
 		err := os.RemoveAll(ddir)
-		log.Info("removed data for %s from %s - removeAll rc: %v", tu.Name, ddir, err)
+		log.Info("removed data for %s from %s - removeAll err: %v", tu.Name, ddir, err)
 	}
 	// delete .torrent, tags.yaml
-	os.Remove(tu.Tags.getString("fullpath", "/tmp/should_not_exists"))
-	os.Remove(tu.Tags.getString("tags_fullpath", "/tmp/should_not_exists"))
+	_ = os.Remove(tu.Tags.getString("fullpath", "/tmp/should_not_exists"))
+	_ = os.Remove(tu.Tags.getString("tags_fullpath", "/tmp/should_not_exists"))
 	log.Info("torrent %s (data: %v) removed from client", tu.Name, deleteData)
 }
 
 func (tu *TorrentWithUserData) ProcessTags() {
 	log.Trace("ProcessTags: %s", tu.Name)
-	tu.c.lock.Lock()
-	defer tu.c.lock.Unlock()
+
+	paused := "no"
+	if tu.Paused {
+		paused = "yes"
+	}
+	completed := "no"
+	if tu.Completed() {
+		completed = "yes"
+	}
+	tu.Tags.Set("maxConnections", tu.maxConnections)
+	tu.Tags.Set("completed", completed)
+	tu.Tags.Set("paused", paused)
 
 	if tu.InPlay() {
 		tu.Resume("InPlay")
 		return
 	}
+	//
 	// populate some info
 	info := tu.TorrentInfo()
-	bytes, _ := strconv.ParseInt(tu.Tags.getString("upload_bytes", "0"), 10, 64)
-	tu.Tags.Set("upload_bytes", fmt.Sprintf("%d", info.BytesUploaded+bytes))
-	//
-	tu.SaveTags()
+	if bytes, err := strconv.ParseInt(tu.Tags.getString("upload_bytes", "0"), 10, 64); err == nil {
+		if tu.onstart_uploaded < 0 {
+			tu.onstart_uploaded = bytes
+		}
+		tu.Tags.Set("upload_bytes", fmt.Sprintf("%d", info.BytesUploaded+tu.onstart_uploaded))
+	}
+	if bytes, err := strconv.ParseInt(tu.Tags.getString("downloaded_bytes", "0"), 10, 64); err == nil {
+		if tu.onstart_downloaded < 0 {
+			tu.onstart_downloaded = bytes
+		}
+		tu.Tags.Set("downloaded_bytes", fmt.Sprintf("%d", info.BytesDownloaded+tu.onstart_downloaded))
+	}
 
 	// save_to_library
 	if tu.Tags.getString("save_to_library", "") == "yes" {
@@ -387,26 +438,20 @@ func (tu *TorrentWithUserData) ProcessTags() {
 	}
 
 	// save_torrent tag, just if need manual recovery from running client
-	if tu.Tags.getString("save_torrent", "") == "yes" {
-		if tu.Tags.getString("torrent_saved", "no") != "yes" {
-			tu.SaveTorrent()
-		}
-	}
+	tu.SaveTorrent()
+	tu.SaveTags()
 
 	// watch_later
 	if tu.Tags.getString("watch_later", "") == "yes" {
-		if tu.Tags.getString("torrent_saved", "no") != "yes" {
-			tu.SaveTorrent()
-		}
-		//
 		if tu.c.ActivePlays() <= 0 {
 			tu.Resume("ActivePlays <= 0")
 		}
 	}
+
 	// if source - kodi, remove if not used
 	if tu.Tags.getString("source", "") == "kodi" {
 		tu.Tags.SetIfNew("added", time.Now().Format(time.RFC822))
-		added, _ := time.Parse(time.RFC822, tu.Tags.getString("added", ""))
+		added := tu.Tags.getTime("added", time.Now())
 		delta := time.Now().Sub(added).Hours()
 		if delta < 5 {
 			return
@@ -420,6 +465,7 @@ func (tu *TorrentWithUserData) ProcessTags() {
 		//	return
 		//}
 		tu.Tags.Set("delete_data", "yes")
+		tu.Tags.Set("delete_it", "yes")
 		log.Trace("%s view only torrent, older than 5 hours. drop", tu.Name)
 		tu.Drop("view only kodi")
 	}
@@ -432,9 +478,8 @@ func (tu *TorrentWithUserData) ProcessTags() {
 	}
 
 	//  adjust speed
-	if tu.Tags.getString("private", "") == "" && tu.Completed() && tu.maxConnections != 1 {
+	if tu.Tags.getString("private", "no") == "no" && tu.Completed() && tu.maxConnections != 1 {
 		tu.maxConnections = tu.torrent.SetMaxEstablishedConns(1)
 		log.Debug("%s completed and not private, set maxConnections to 1", tu.Name)
 	}
-
 }
