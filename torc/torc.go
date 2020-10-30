@@ -26,6 +26,7 @@ var (
 
 type TorrentClient struct {
 	tc       *tt.Client
+	ml       *MagnetLoader
 	cfg      *tt.ClientConfig
 	cw       chan Event
 	LoadDone chan bool
@@ -87,6 +88,8 @@ func NewTorrentClient(logger *logger.Log) *TorrentClient {
 			torClient.tc = c
 		}
 
+		//
+		torClient.ml = NewMagnetLoader(GetEnv("TC_TEMPDIR", "/tmp"))
 		//
 		torClient.cw = NewCategoryWatcher(torClient.TorrentsDir)
 		torClient.LoadDone = make(chan bool)
@@ -165,9 +168,9 @@ func (c *TorrentClient) fileWatcher() {
 				if tags := ReadTagsFromFile(ev.FullPath); tags != nil {
 					if tu, _ := c.GetTorrent(tags.getString("infohash", "there_were_no_infohash")); tu != nil {
 						log.Debug("Reloading tags for %s", tu.Name)
-						tu.LoadTags()
 						tu.ClearTags()
 						tu.SetTags(tags)
+						tu.SyncTags()
 						tu.Tags.Validate("TorrentFileCreated force validate")
 						log.Trace("%s tags are:\n%s", tu.Name, tu.Tags.String())
 					}
@@ -176,29 +179,23 @@ func (c *TorrentClient) fileWatcher() {
 				_, _ = c.AddTorrentFromFile(ev.Category, ev.File, ev.FullPath)
 			}
 		case TorrentFileRemoved:
-			delete_data := false
-			drop_torrent := false
+			drop := ""
+			drop_data := ""
 			if strings.HasSuffix(ev.File, ".tags.yaml") {
-				drop_torrent = true
+				drop = "yaml file removed"
 			}
 			if strings.HasSuffix(ev.File, ".torrent") {
-				delete_data = true
-				drop_torrent = true
+				drop = "torrent file removed, deleting data too"
+				drop_data = "yes"
 			}
-			log.Debug("Dropping torrent: %s, drop: %v delete_data: %v", ev.File, drop_torrent, delete_data)
-			if drop_torrent {
+			log.Debug("Dropping torrent: %s, drop: %v delete_data: %v", ev.File, drop, drop_data)
+			if drop != "" {
 				if tud, _ := c.GetTorrent(ev.FullPath); tud != nil {
-					log.Error("%s deleted, marking to remove from client", ev.File)
-					tud.Tags.Set("delete_it", "yes")
-					if delete_data {
-						tud.Tags.Set("delete_data", "yes")
-						tud.Tags.Set("force_delete", "yes")
-					}
-					c.ProcessTags()
+					tud.Drop(drop, drop_data, true)
 				}
 			}
 		}
-		log.Debug("event processing is complete len/cap: %v/%v", ev, len(c.cw), cap(c.cw))
+		log.Debug("event processing is complete len/cap: %v/%v", ev, len(c.cw))
 	}
 }
 
@@ -273,15 +270,14 @@ func (c *TorrentClient) AddTorrentFromFile(cat *tCategory, filename string, full
 	if tud, err = c.AddTorrentFromData(cat.name, filename, info, &Tags{}); err != nil {
 		return
 	}
-	tud.LoadTags()
+	tud.SyncTags()
 	tud.Tags.SetIfNew("source", "from_file")
 	log.Debug("Verifying data for %s", tud.Name)
 	tud.torrent.VerifyData()
 	log.Debug("Verifying data for %s is done", tud.Name)
+	tud.ProcessTags()
 	log.Debug("AddTorrentFromFile completed: %s", tud.Name)
 	log.Debug("\n%s", tud.Tags.String())
-	tud.ProcessTags()
-	tud.TrackProgress()
 	return
 }
 
@@ -338,73 +334,32 @@ func (c *TorrentClient) AddTorrentFromData(cat string, name string, info []byte,
 		err = newError(log.Error("failed to AddTorrent: %v", err))
 		return
 	}
-	if len(c.Trackers) > 5 {
-		tor.AddTrackers(c.Trackers)
-	}
+	//if len(c.Trackers) > 5 {
+	//	tor.AddTrackers(c.Trackers)
+	//}
 	<-tor.GotInfo()
 	if tor.Info().Private != nil {
 		tud.Tags.SetIfNew("private", "yes")
 		d_added := tud.Tags.getTime("added", time.Now())
 		d_expiration := d_added.Add(time.Hour * 24 * 7 * 3)
 		tud.Tags.SetIfNew("seed_until", d_expiration.Format(time.RFC822))
+	} else {
+		if len(c.Trackers) > 5 {
+			tor.AddTrackers(c.Trackers)
+		}
 	}
 	tud.Tags.SetIfNew("datapath", path.Join(pcat.download, tor.Name()))
 	tud.torrent = tor
 	tud.InfoReady = true
-	tud.Pause()
+	tud.Pause("just added, waiting on SyncFiles")
 	tud.SyncFiles()
 	log.Info("%s added to client", tud.Name)
+	tud.TrackProgress()
 	return
 }
 
-func (c *TorrentClient) LoadMetaInfoFromMagnet(uri string) (mi []byte, err error) {
-	var bb bytes.Buffer
-	mi = nil
-	err = nil
-	log.Debug("uri: %s", uri)
-	if tt, _ := c.GetTorrent(uri); tt != nil {
-		tt.torrent.Metainfo().Write(&bb)
-		return bb.Bytes(), nil
-	}
-	tags := &Tags{}
-	pcat := GetCategoryOrDefault("magnets", "video")
-	tags.SetIfNew("category", pcat.name)
-	tags.SetIfNew("download", pcat.download)
-	tags.SetIfNew("magnet", uri)
-	tags.SetIfNew("delete_data", "yes")
-	tags.SetIfNew("delete_it", "yes")
-
-	tud := NewTorrentWithUserData(tags)
-	tud.Name = uri
-	tud.c = c
-	done := false
-	for i, v := range c.torrents {
-		if v == nil {
-			done = true
-			c.torrents[i] = tud
-			break
-		}
-	}
-	if !done {
-		c.torrents = append(c.torrents, tud)
-	}
-	_tor, err := c.tc.AddMagnet(uri)
-	if err != nil {
-		log.Error("Failed to AddMagnet: %s", err)
-		return
-	}
-	tud.Tags.Set("infohash", _tor.InfoHash().String())
-	if len(c.Trackers) > 5 {
-		_tor.AddTrackers(c.Trackers)
-	}
-	log.Debug("waiting on metainfo: %s", uri)
-	<-_tor.GotInfo()
-	tud.torrent = _tor
-	tud.Pause()
-	log.Debug("metainfo received %s", uri)
-	_tor.Metainfo().Write(&bb)
-	tud.Drop("magnet info loaded, no need anymore")
-	return bb.Bytes(), nil
+func (c *TorrentClient) LoadMetaInfoFromMagnet(uri string, name string) (mi []byte, err error) {
+	return c.ml.LoadMagnet(uri)
 }
 
 func (c *TorrentClient) GetTorrents() []*TorrentWithUserData {
@@ -414,7 +369,7 @@ func (c *TorrentClient) GetTorrents() []*TorrentWithUserData {
 func (c *TorrentClient) PauseNotInPlay() {
 	for _, t := range c.torrents {
 		if !(t.InPlay() || t.Completed() || t.ForceDownload) {
-			t.Pause()
+			t.Pause("paused because some torrents about to be playing")
 		}
 	}
 }

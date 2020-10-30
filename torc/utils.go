@@ -150,10 +150,10 @@ func (t Tags) getTime(name string, defval time.Time) time.Time {
 }
 
 func (t Tags) Set(name string, value interface{}) {
-	oval := t[name]
-	if oval != value {
+	oval, ok := t[name]
+	if !ok || oval != value {
 		t[name] = value
-		t.Invalidate(fmt.Sprintf("%s: %v != %v, tags are invalidated", name, oval, value))
+		t.Invalidate(fmt.Sprintf("%s: %v -> %v, tags are invalidated", name, oval, value))
 	}
 }
 
@@ -165,9 +165,9 @@ func (t Tags) SetIfNew(name string, value interface{}) {
 
 func (t Tags) Remove(name string) {
 	if _, ok := t[name]; ok {
+		delete(t, name)
 		t.Invalidate(fmt.Sprintf("%s key removed, tags are invalidated", name))
 	}
-	delete(t, name)
 }
 
 func (t Tags) Invalidate(comment string) {

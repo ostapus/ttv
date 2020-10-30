@@ -208,21 +208,23 @@ func _torrentFileList(w http.ResponseWriter, r *http.Request) {
 			log.Error(httpError(w, http.StatusBadRequest, "link is missing"))
 			return
 		}
+		var err error = nil
+		var metainfo []byte = nil
+		if strings.HasPrefix(link, "magnet:") {
+			log.Debug("Loading metainfo for magnet: %s", link)
+			if metainfo, err = tc.LoadMetaInfoFromMagnet(link, tname); err != nil {
+				log.Error(httpError(w, http.StatusBadRequest, "failed lot load metadata for magnet: %s", err))
+				return
+			}
+		} else {
+			log.Debug("loading link %s for %s", link, tname)
+			metainfo, _, err = doGet(link)
+		}
 
-		log.Debug("loading link %s for %s", link, tname)
-		metainfo, magnet, err := doGet(link)
 		if err != nil {
 			log.Error(httpError(w, http.StatusBadRequest, "failed to load torrent from Jackett: %v", err))
 			return
 		}
-		if magnet != "" {
-			log.Debug("Loading metainfo for magnet: %s", magnet)
-			if metainfo, err = tc.LoadMetaInfoFromMagnet(magnet); err != nil {
-				log.Error(httpError(w, http.StatusBadRequest, "failed lot load metadata for magnet: %s", err))
-				return
-			}
-		}
-
 		tags := &Tags{
 			"source": "kodi",
 		}
